@@ -10,9 +10,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{MySql, MySqlPool, Row, Transaction};
 
-use super::episodes::ensure_episode_metadata_cached;
+use super::episodes::{ensure_episode_metadata_cached, episode_has_user_visible_change};
 use super::response::{ApiResponse, bad_request, internal_error, success};
 use crate::api::logs::{LogTarget, write_recording_log};
+use crate::api::search::{IDSearchQuery, search_bangumi_by_id};
 use crate::auth_bearer::AuthUser;
 
 const DEFAULT_PAGE_SIZE: usize = 500;
@@ -169,6 +170,14 @@ async fn sync(
         }
     }
 
+    let subject_ids = body
+        .records
+        .iter()
+        .map(|record| record.bangumi_id)
+        .collect::<BTreeSet<_>>();
+    for bangumi_id in subject_ids {
+        ensure_bangumi_in_pool(pool, bangumi_id).await?;
+    }
     validate_episode_ordinals(pool, &body.records).await?;
 
     let mut tx = pool.begin().await?;
@@ -232,20 +241,39 @@ async fn sync(
     })
 }
 
-async fn ensure_bangumi_in_pool(pool: &MySqlPool, bangumi_id: u32) -> Result<u32, sqlx::Error> {
+async fn ensure_bangumi_in_pool(pool: &MySqlPool, bangumi_id: u32) -> Result<u32, SyncAniError> {
     let external_id = bangumi_id.to_string();
-    sqlx::query(
-        "INSERT INTO bangumi_info_easy (external_id, title, type) VALUES (?, ?, 8) \
-         ON DUPLICATE KEY UPDATE external_id = VALUES(external_id)",
+    if let Some(easy_id) =
+        sqlx::query_scalar::<_, u32>("SELECT id FROM bangumi_info_easy WHERE external_id = ?")
+            .bind(&external_id)
+            .fetch_optional(pool)
+            .await?
+    {
+        return Ok(easy_id);
+    }
+
+    let lookup = search_bangumi_by_id(
+        State(pool.clone()),
+        Json(IDSearchQuery {
+            id: Some(bangumi_id),
+            force: false,
+        }),
     )
-    .bind(&external_id)
-    .bind(format!("Bangumi #{bangumi_id}"))
-    .execute(pool)
-    .await?;
-    sqlx::query_scalar::<_, u32>("SELECT id FROM bangumi_info_easy WHERE external_id = ?")
-        .bind(external_id)
-        .fetch_one(pool)
-        .await
+    .await
+    .0;
+
+    if lookup.status != 0 {
+        return Err(SyncAniError::Invalid(format!(
+            "Bangumi {bangumi_id} does not exist or could not be fetched"
+        )));
+    }
+
+    Ok(
+        sqlx::query_scalar::<_, u32>("SELECT id FROM bangumi_info_easy WHERE external_id = ?")
+            .bind(external_id)
+            .fetch_one(pool)
+            .await?,
+    )
 }
 
 async fn cached_episode_ordinals(
@@ -317,17 +345,8 @@ async fn ensure_bangumi(
     tx: &mut Transaction<'_, MySql>,
     bangumi_id: u32,
 ) -> Result<u32, sqlx::Error> {
-    let external_id = bangumi_id.to_string();
-    sqlx::query(
-        "INSERT INTO bangumi_info_easy (external_id, title, type) VALUES (?, ?, 8) \
-         ON DUPLICATE KEY UPDATE external_id = VALUES(external_id)",
-    )
-    .bind(&external_id)
-    .bind(format!("Bangumi #{bangumi_id}"))
-    .execute(&mut **tx)
-    .await?;
     sqlx::query_scalar::<_, u32>("SELECT id FROM bangumi_info_easy WHERE external_id = ?")
-        .bind(external_id)
+        .bind(bangumi_id.to_string())
         .fetch_one(&mut **tx)
         .await
 }
@@ -596,27 +615,29 @@ async fn apply_episode(
         .bind(input.updated_at)
         .execute(&mut **tx)
         .await?;
-        pending_logs.push(PendingRecordingLog {
-            recording_id,
-            bangumi_easy_id,
-            action: "episode_created",
-            field_name: None,
-            old_value: None,
-            new_value: Some(json!({
-                "ordinal": input.ordinal,
-                "watched": input.watched,
-                "progress_seconds": input.progress_seconds,
-                "duration_seconds": input.duration_seconds,
-                "completed_at": input.completed_at,
-                "updated_at": input.updated_at,
-            })),
-            metadata: json!({
-                "source": "animeko",
-                "bangumi_id": bangumi_id,
-                "ordinal": input.ordinal,
-                "client_updated_at": input.updated_at,
-            }),
-        });
+        if episode_has_user_visible_change(false, None, input.watched, input.progress_seconds) {
+            pending_logs.push(PendingRecordingLog {
+                recording_id,
+                bangumi_easy_id,
+                action: "episode_created",
+                field_name: None,
+                old_value: None,
+                new_value: Some(json!({
+                    "ordinal": input.ordinal,
+                    "watched": input.watched,
+                    "progress_seconds": input.progress_seconds,
+                    "duration_seconds": input.duration_seconds,
+                    "completed_at": input.completed_at,
+                    "updated_at": input.updated_at,
+                })),
+                metadata: json!({
+                    "source": "animeko",
+                    "bangumi_id": bangumi_id,
+                    "ordinal": input.ordinal,
+                    "client_updated_at": input.updated_at,
+                }),
+            });
+        }
     }
     Ok(())
 }
@@ -624,16 +645,15 @@ async fn apply_episode(
 fn episode_update_has_user_visible_change(
     old_watched: bool,
     old_progress_seconds: Option<i32>,
-    old_duration_seconds: Option<i32>,
+    _old_duration_seconds: Option<i32>,
     input: &SyncAniEpisodeInput,
 ) -> bool {
-    old_watched != input.watched
-        || normalized_progress(old_progress_seconds) != normalized_progress(input.progress_seconds)
-        || old_duration_seconds != input.duration_seconds
-}
-
-fn normalized_progress(progress_seconds: Option<i32>) -> Option<i32> {
-    progress_seconds.filter(|seconds| *seconds != 0)
+    episode_has_user_visible_change(
+        old_watched,
+        old_progress_seconds,
+        input.watched,
+        input.progress_seconds,
+    )
 }
 
 async fn load_record(
@@ -815,6 +835,37 @@ mod tests {
     }
 
     #[test]
+    fn duration_only_refresh_does_not_create_user_visible_episode_logs() {
+        let input = SyncAniEpisodeInput {
+            ordinal: 1,
+            watched: false,
+            progress_seconds: Some(0),
+            duration_seconds: Some(1_440),
+            completed_at: None,
+            updated_at: time("2026-07-16T05:02:23.325"),
+        };
+
+        assert!(!episode_has_user_visible_change(
+            false,
+            None,
+            input.watched,
+            input.progress_seconds,
+        ));
+        assert!(!episode_update_has_user_visible_change(
+            false,
+            Some(0),
+            Some(0),
+            &input,
+        ));
+        assert!(episode_update_has_user_visible_change(
+            false,
+            Some(30),
+            Some(0),
+            &input,
+        ));
+    }
+
+    #[test]
     fn completion_timestamp_backfill_does_not_create_user_visible_episode_logs() {
         let updated_at = time("2026-07-16T05:02:23.325");
         let input = SyncAniEpisodeInput {
@@ -882,7 +933,14 @@ mod tests {
         .unwrap()
         .last_insert_id() as i64;
         let bangumi_id = 900_000_000 + (unique.as_u128() % 90_000_000) as u32;
-        let easy_id = ensure_bangumi_in_pool(&pool, bangumi_id).await.unwrap();
+        let easy_id = sqlx::query(
+            "INSERT INTO bangumi_info_easy (external_id, title, type) VALUES (?, 'sync-ani test', 1)",
+        )
+        .bind(bangumi_id.to_string())
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id() as u32;
         for ordinal in [1, 2] {
             sqlx::query(
                 "INSERT INTO bangumi_episodes \

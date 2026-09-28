@@ -367,6 +367,34 @@ paths:
         "404":
           description: 条目未找到
 
+  /api/v2/bangumi/{id}/refresh:
+    post:
+      summary: 强制刷新 Bangumi 条目内容
+      description: 跳过 24 小时缓存，重新抓取并覆盖标题、类型、封面与详情缓存。
+      tags: [搜索]
+      security: [{ BearerJWT: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+          description: Bangumi 外部 ID
+      responses:
+        "200":
+          description: 已刷新的条目详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/BangumiItem"
+        "404":
+          description: 条目未找到
+        "500":
+          description: 上游抓取或缓存写入失败
+
   /api/v2/bangumi/{id}/episodes:
     get:
       summary: 获取剧集元数据列表（爬取 bgm.tv 并缓存，支持 ?force=true 强制刷新）

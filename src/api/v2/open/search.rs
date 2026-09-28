@@ -1,6 +1,7 @@
+use crate::auth_bearer::AuthUser;
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::{HeaderMap, StatusCode},
 };
 use serde::{Deserialize, Serialize};
@@ -62,9 +63,11 @@ pub struct LocalSearchParams {
 async fn verify_token<T: Serialize>(
     pool: &MySqlPool,
     token: Option<&str>,
-) -> Result<(), (StatusCode, Json<ApiResponse<T>>)> {
+) -> Result<AuthUser, (StatusCode, Json<ApiResponse<T>>)> {
     match require_token_with_perm(pool, token, &[PERM_READ, PERM_WRITE]).await {
-        Ok(_) => Ok(()),
+        Ok(info) => Ok(AuthUser {
+            user_id: info.user_id,
+        }),
         Err(StatusCode::UNAUTHORIZED) => Err(v2_unauthorized("Invalid API token")),
         Err(StatusCode::FORBIDDEN) => Err(v2_forbidden("Insufficient permissions")),
         Err(_) => Err(v2_unauthorized("Invalid API token")),
@@ -162,16 +165,17 @@ pub async fn get_other(
     headers: HeaderMap,
     Query(params): Query<BangumiQuery>,
 ) -> (StatusCode, Json<ApiResponse<crate::api::search::OtherItem>>) {
-    if let Err(e) = verify_token(
+    let auth_user = match verify_token(
         &pool,
         api_token_from_request(&headers, params.token.as_deref()),
     )
     .await
     {
-        return e;
-    }
+        Ok(auth_user) => auth_user,
+        Err(e) => return e,
+    };
 
-    v2_get_other(State(pool), Path(id)).await
+    v2_get_other(State(pool), Extension(auth_user), Path(id)).await
 }
 
 /// GET /api/v2/open/bangumi/:id?force=true&token=xxx
@@ -257,4 +261,26 @@ pub async fn search_local(
         }),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn other_detail_requires_api_token() {
+        let pool = MySqlPool::connect_lazy("mysql://unused:unused@127.0.0.1/unused").unwrap();
+        let (status, response) = get_other(
+            State(pool),
+            Path(1),
+            HeaderMap::new(),
+            Query(BangumiQuery {
+                force: None,
+                token: None,
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(response.0.data.is_none());
+    }
 }

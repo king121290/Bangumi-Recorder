@@ -135,6 +135,7 @@ async fn ensure_bangumi_easy_id(pool: &MySqlPool, bangumi_external_id: u32) -> R
         State(pool.clone()),
         Json(IDSearchQuery {
             id: Some(bangumi_external_id),
+            force: false,
         }),
     )
     .await;
@@ -317,7 +318,19 @@ async fn create_or_resolve_other(
     params: &AddRecordQuery,
 ) -> Result<u32, i32> {
     if let Some(id) = params.other_id {
-        return Ok(id);
+        // Check before both insertion and restoration of an existing recording.
+        return sqlx::query_scalar::<_, u32>(
+            "SELECT id FROM other_recorders WHERE id = ? AND (add_user IS NULL OR add_user = ?)",
+        )
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            log::error!("Failed to resolve custom item: {}", e);
+            -1
+        })?
+        .ok_or(-2);
     }
 
     let title = params
@@ -608,5 +621,129 @@ pub async fn add_record(
                 Err(status) => Json(empty_response(status)),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{
+        api_token::{PERM_READ, hash_token},
+        v2,
+    };
+    use axum::{
+        extract::{Path, Query},
+        http::{HeaderMap, StatusCode},
+    };
+
+    #[tokio::test]
+    #[ignore = "requires OTHER_ACCESS_TEST_DATABASE_URL pointing to a disposable MySQL database"]
+    async fn other_access_is_scoped_to_authenticated_user() {
+        // One connection keeps all fixtures in session-local temporary tables.
+        // Never read DATABASE_URL or run the application's migrations/startup.
+        let url =
+            std::env::var("OTHER_ACCESS_TEST_DATABASE_URL").expect("explicit test database URL");
+        let pool = sqlx::mysql::MySqlPoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect(&url)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TEMPORARY TABLE other_recorders (id INT UNSIGNED PRIMARY KEY, name VARCHAR(255), description TEXT, cover_url VARCHAR(255), max_number INT, status TINYINT, add_user INT UNSIGNED)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO other_recorders (id, name, add_user) VALUES (1, 'public', NULL), (2, 'alice', 10), (3, 'bob', 20)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("CREATE TEMPORARY TABLE api_tokens (user_id INT UNSIGNED, token_hash VARCHAR(64), permissions BIGINT UNSIGNED, is_active TINYINT, last_used_at DATETIME)")
+            .execute(&pool).await.unwrap();
+        for (user_id, token) in [(10_i64, "alice-token"), (20, "bob-token")] {
+            sqlx::query("INSERT INTO api_tokens (user_id, token_hash, permissions, is_active) VALUES (?, ?, ?, 1)")
+                .bind(user_id).bind(hash_token(token)).bind(PERM_READ)
+                .execute(&pool).await.unwrap();
+        }
+
+        for (user_id, token) in [(10_i64, "alice-token"), (20, "bob-token")] {
+            for id in 1..=4 {
+                let visible = id == 1 || (id == 2 && user_id == 10) || (id == 3 && user_id == 20);
+                // Spoofed JSON identity must not affect the authenticated caller.
+                let params: AddRecordQuery = serde_json::from_value(json!({
+                    "other_id": id, "user_id": 30 - user_id, "add_user": 30 - user_id,
+                    "other_title": "must not create a fallback"
+                }))
+                .unwrap();
+                assert_eq!(
+                    create_or_resolve_other(&pool, user_id, &params).await,
+                    if visible { Ok(id) } else { Err(-2) }
+                );
+                if !visible {
+                    // Denial happens before any recordings lookup, restore, or insert.
+                    let response = add_record(
+                        State(pool.clone()),
+                        Extension(AuthUser { user_id }),
+                        Json(params),
+                    )
+                    .await;
+                    assert_eq!(response.0.status, -2);
+                    assert!(response.0.other_id.is_none());
+                }
+                let response = crate::api::search::get_other_by_id(
+                    State(pool.clone()),
+                    Extension(AuthUser { user_id }),
+                    Json(IDSearchQuery {
+                        id: Some(id),
+                        force: false,
+                    }),
+                )
+                .await;
+                assert_eq!(response.0.status, if visible { 0 } else { -2 });
+                assert_eq!(response.0.data.is_some(), visible);
+                let (status, response) = v2::search::get_other(
+                    State(pool.clone()),
+                    Extension(AuthUser { user_id }),
+                    Path(id),
+                )
+                .await;
+                assert_eq!(
+                    status,
+                    if visible {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::NOT_FOUND
+                    }
+                );
+                assert_eq!(response.0.data.is_some(), visible);
+
+                // The header token wins over a conflicting query token.
+                let mut headers = HeaderMap::new();
+                headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
+                let (status, response) = v2::open::search::get_other(
+                    State(pool.clone()),
+                    Path(id),
+                    headers,
+                    Query(v2::open::search::BangumiQuery {
+                        force: None,
+                        token: Some(
+                            if user_id == 10 {
+                                "bob-token"
+                            } else {
+                                "alice-token"
+                            }
+                            .into(),
+                        ),
+                    }),
+                )
+                .await;
+                assert_eq!(
+                    status,
+                    if visible {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::NOT_FOUND
+                    }
+                );
+                assert_eq!(response.0.data.is_some(), visible);
+            }
+        }
+        pool.close().await;
     }
 }

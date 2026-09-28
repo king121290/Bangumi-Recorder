@@ -1,6 +1,7 @@
+use crate::auth_bearer::AuthUser;
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
 };
 use chrono::{Duration, NaiveDate, Utc};
@@ -140,7 +141,14 @@ pub async fn get_bangumi(
         });
     }
 
-    let v1_resp = v1_search_by_id(State(pool.clone()), Json(IDSearchQuery { id: Some(id) })).await;
+    let v1_resp = v1_search_by_id(
+        State(pool.clone()),
+        Json(IDSearchQuery {
+            id: Some(id),
+            force,
+        }),
+    )
+    .await;
 
     let inner = v1_resp.0;
     match inner.status {
@@ -149,6 +157,32 @@ pub async fn get_bangumi(
             None => not_found("Bangumi not found"),
         },
         _ => internal_error("Search failed"),
+    }
+}
+
+/// POST /api/v2/bangumi/:id/refresh
+///
+/// Re-fetches the Bangumi subject and explicitly replaces cacheable content.
+pub async fn refresh_bangumi(
+    State(pool): State<MySqlPool>,
+    Path(id): Path<u32>,
+) -> (StatusCode, Json<ApiResponse<BangumiItem>>) {
+    let v1_resp = v1_search_by_id(
+        State(pool),
+        Json(IDSearchQuery {
+            id: Some(id),
+            force: true,
+        }),
+    )
+    .await;
+    let inner = v1_resp.0;
+    match inner.status {
+        0 => match inner.data {
+            Some(item) => success(item),
+            None => not_found("Bangumi not found"),
+        },
+        -3 => not_found("Bangumi not found"),
+        _ => internal_error("Unable to refresh Bangumi content"),
     }
 }
 
@@ -210,10 +244,18 @@ pub async fn get_imdb(
 /// GET /api/v2/other/:id
 pub async fn get_other(
     State(pool): State<MySqlPool>,
+    Extension(auth_user): Extension<AuthUser>,
     Path(id): Path<u32>,
 ) -> (StatusCode, Json<ApiResponse<OtherItem>>) {
-    let v1_resp =
-        v1_get_other_by_id(State(pool.clone()), Json(IDSearchQuery { id: Some(id) })).await;
+    let v1_resp = v1_get_other_by_id(
+        State(pool.clone()),
+        Extension(auth_user),
+        Json(IDSearchQuery {
+            id: Some(id),
+            force: false,
+        }),
+    )
+    .await;
     let inner = v1_resp.0;
     match inner.status {
         0 => match inner.data {

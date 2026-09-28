@@ -97,7 +97,13 @@ pub async fn update_info(
     .await
     {
         Ok(_) => {}
-        Err(e) => log::error!("Failed to update user info for {}: {:?}", user_id, e),
+        Err(e) => {
+            log::error!("Failed to update user info for {}: {:?}", user_id, e);
+            return Json(UserResponse {
+                status: 5,
+                message: Some("Database error".to_string()),
+            });
+        }
     };
 
     Json(UserResponse {
@@ -148,7 +154,13 @@ pub async fn update_password(
                 .await
                 {
                     Ok(_) => {}
-                    Err(e) => log::error!("Failed to update password for {}: {:?}", user_id, e),
+                    Err(e) => {
+                        log::error!("Failed to update password for {}: {:?}", user_id, e);
+                        return Json(UserResponse {
+                            status: 5,
+                            message: Some("Database error".to_string()),
+                        });
+                    }
                 }
 
                 Json(UserResponse {

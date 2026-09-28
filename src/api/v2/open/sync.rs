@@ -60,7 +60,7 @@ pub async fn sync_records(
     };
 
     let token_info =
-        match require_token_with_perm(&pool, Some(token), &[PERM_READ, PERM_WRITE]).await {
+        match require_token_with_all_perms(&pool, Some(token), &[PERM_READ, PERM_WRITE]).await {
             Ok(info) => info,
             Err(StatusCode::UNAUTHORIZED) => return unauthorized("Invalid API token"),
             Err(_) => return forbidden("Insufficient permissions"),

@@ -1,6 +1,9 @@
 use std::{collections::HashMap, sync::OnceLock};
 
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::{Extension, State},
+};
 use serde::{Deserialize, Serialize};
 
 use reqwest::Client;
@@ -9,6 +12,7 @@ use sqlx::QueryBuilder;
 use sqlx::mysql::MySqlPool;
 use urlencoding::encode;
 
+use crate::auth_bearer::AuthUser;
 use chrono::{Duration, NaiveDate, Utc};
 
 fn http_client() -> &'static Client {
@@ -34,6 +38,8 @@ pub struct TitleSearchQuery {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IDSearchQuery {
     pub id: Option<u32>,
+    #[serde(default)]
+    pub force: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -267,6 +273,7 @@ pub async fn search_bangumi_by_id(
         });
     }
 
+    let force = params.force;
     let id = params.id.unwrap();
 
     let _local_bangumi_id: Option<u32> =
@@ -284,7 +291,7 @@ pub async fn search_bangumi_by_id(
             }
         };
 
-    if _local_bangumi_id.is_some() {
+    if !force && _local_bangumi_id.is_some() {
         match sqlx::query!(
             r#"
             SELECT 
@@ -344,6 +351,15 @@ pub async fn search_bangumi_by_id(
             });
         }
     };
+
+    // A 404 page has enough HTML for the scraper to produce an empty item.
+    // Do not cache that as a real Bangumi subject.
+    if !resp.status().is_success() {
+        return Json(IDSearchResponse {
+            status: -3,
+            data: None,
+        });
+    }
 
     let html = match resp.text().await {
         Ok(t) => t,
@@ -493,6 +509,15 @@ pub async fn search_bangumi_by_id(
         }
     };
 
+    // Keep invalid/error pages out of the cache even when they happened to
+    // return HTTP 200 (for example, an upstream anti-bot response).
+    if result.title.trim().is_empty() {
+        return Json(IDSearchResponse {
+            status: -3,
+            data: None,
+        });
+    }
+
     let bangumi_easy_id: u32 = match sqlx::query!(
         r#"SELECT id, title, cover_url FROM bangumi_info_easy WHERE external_id = ?"#,
         id
@@ -501,13 +526,32 @@ pub async fn search_bangumi_by_id(
     .await
     {
         Ok(Some(row)) => {
-            if !row.title.is_empty() {
-                result.title = row.title;
-            }
-            if let Some(ref db_cover) = row.cover_url
-                && !db_cover.is_empty()
-            {
-                result.cover_url = db_cover.clone();
+            if force {
+                if sqlx::query(
+                    "UPDATE bangumi_info_easy SET title = ?, type = ?, cover_url = ? WHERE id = ?",
+                )
+                .bind(&result.title)
+                .bind(result.r#type)
+                .bind(&result.cover_url)
+                .bind(row.id)
+                .execute(&pool)
+                .await
+                .is_err()
+                {
+                    return Json(IDSearchResponse {
+                        status: -4,
+                        data: None,
+                    });
+                }
+            } else {
+                if !row.title.is_empty() {
+                    result.title = row.title;
+                }
+                if let Some(ref db_cover) = row.cover_url
+                    && !db_cover.is_empty()
+                {
+                    result.cover_url = db_cover.clone();
+                }
             }
             row.id
         }
@@ -664,6 +708,7 @@ pub struct OtherDetailResponse {
 
 pub async fn get_other_by_id(
     State(pool): State<MySqlPool>,
+    Extension(auth_user): Extension<AuthUser>,
     Json(params): Json<IDSearchQuery>,
 ) -> Json<OtherDetailResponse> {
     let id = match params.id {
@@ -676,10 +721,21 @@ pub async fn get_other_by_id(
         }
     };
 
-    match sqlx::query!(
-        "SELECT id, name, description, cover_url, max_number, status FROM other_recorders WHERE id = ?",
-        id
+    #[derive(sqlx::FromRow)]
+    struct OtherRow {
+        id: u32,
+        name: Option<String>,
+        description: Option<String>,
+        cover_url: Option<String>,
+        max_number: Option<i32>,
+        status: Option<i8>,
+    }
+
+    match sqlx::query_as::<_, OtherRow>(
+        "SELECT id, name, description, cover_url, max_number, status FROM other_recorders WHERE id = ? AND (add_user IS NULL OR add_user = ?)",
     )
+    .bind(id)
+    .bind(auth_user.user_id)
     .fetch_optional(&pool)
     .await
     {

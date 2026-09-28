@@ -29,6 +29,12 @@ import type {
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "";
+let sessionController = new AbortController();
+
+export function cancelSessionRequests() {
+  sessionController.abort();
+  sessionController = new AbortController();
+}
 
 export class ApiNetworkError extends Error {
   constructor(
@@ -57,15 +63,20 @@ async function request<T>(
   if (typeof navigator !== "undefined" && !navigator.onLine)
     throw new ApiNetworkError("当前没有网络连接", "offline");
   const controller = new AbortController();
+  const sessionSignal = sessionController.signal;
+  const token = getStoredToken();
   const timeout = window.setTimeout(
     () => controller.abort("timeout"),
     REQUEST_TIMEOUT_MS,
   );
   const abortFromCaller = () => controller.abort(options.signal?.reason);
+  const abortFromSession = () => controller.abort();
   options.signal?.addEventListener("abort", abortFromCaller, { once: true });
+  sessionSignal.addEventListener("abort", abortFromSession, { once: true });
+  if (options.signal?.aborted) abortFromCaller();
 
   try {
-    const token = getStoredToken();
+    controller.signal.throwIfAborted();
     const headers: HeadersInit = { Accept: "application/json" };
     if (options.body !== undefined)
       headers["Content-Type"] = "application/json";
@@ -79,6 +90,8 @@ async function request<T>(
     });
 
     const text = await response.text();
+    // Ignore late responses even if the transport did not honor cancellation.
+    controller.signal.throwIfAborted();
     let data: unknown = {
       status: response.ok ? 0 : -1,
       message: response.statusText,
@@ -94,7 +107,7 @@ async function request<T>(
       }
     }
 
-    if (response.status === 401) {
+    if (response.status === 401 && token === getStoredToken()) {
       clearStoredSession();
       window.dispatchEvent(new Event("bangumi-recorder:session-expired"));
     }
@@ -112,6 +125,7 @@ async function request<T>(
   } finally {
     window.clearTimeout(timeout);
     options.signal?.removeEventListener("abort", abortFromCaller);
+    sessionSignal.removeEventListener("abort", abortFromSession);
   }
 }
 
@@ -139,7 +153,8 @@ export const api = {
     }),
   getConfig: () => request<ApiResponse<ConfigData>>("/api/v2/auth/config"),
 
-  getUserInfo: () => request<ApiResponse<UserInfo>>("/api/v2/me"),
+  getUserInfo: (signal?: AbortSignal) =>
+    request<ApiResponse<UserInfo>>("/api/v2/me", { signal }),
   updateUserInfo: (nickname?: string, avatar?: string) =>
     request<ApiResponse<null>>("/api/v2/me", {
       method: "PATCH",
@@ -218,6 +233,11 @@ export const api = {
     request<ApiResponse<BangumiItem>>(
       `/api/v2/bangumi/${id}${queryString({ force: force || undefined })}`,
     ),
+  refreshBangumi: (id: number) =>
+    request<ApiResponse<BangumiItem>>(`/api/v2/bangumi/${id}/refresh`, {
+      method: "POST",
+    }),
+
   searchImdb: (title: string, page = 1, useApi = false) =>
     request<ApiResponse<ImdbSearchItem[]>>(
       `/api/v2/imdb/search${queryString({ q: title, page, use_api: useApi })}`,

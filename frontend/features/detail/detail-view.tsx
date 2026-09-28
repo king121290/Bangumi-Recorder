@@ -322,6 +322,20 @@ function DetailContent({
     onError: (error) => toast.error(error.message),
   });
 
+  const forceBangumiContent = useMutation({
+    mutationFn: async () => {
+      const response = await api.refreshBangumi(numericId);
+      if (response.status !== 0 || !response.data)
+        throw new Error(response.message || "内容刷新失败");
+      return response.data;
+    },
+    onSuccess: async () => {
+      await refresh();
+      toast.success("条目内容已刷新");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
   const percent = progressPercent(record?.recorder, info.episodes);
   return (
     <>
@@ -359,6 +373,17 @@ function DetailContent({
                   </Badge>
                 ) : null}
               </div>
+              {source === "bangumi" ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  loading={forceBangumiContent.isPending}
+                  onClick={() => forceBangumiContent.mutate()}
+                >
+                  <RefreshCcw className="size-4" />
+                  刷新内容
+                </Button>
+              ) : null}
               <h1 className="text-pretty font-display text-4xl font-semibold leading-[1.02] tracking-[-0.035em] sm:text-5xl">
                 {info.title || "未命名条目"}
               </h1>

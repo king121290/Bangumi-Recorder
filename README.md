@@ -164,6 +164,7 @@ cargo build --release
 |------|------|------|
 | GET | `/api/v2/search?q=Re0&page=1` | 在线搜索 Bangumi（搜索页轻量，详情页 24h 缓存） |
 | GET | `/api/v2/bangumi/:id?force=true` | 按 Bangumi ID 获取详情（24h 本地缓存，`?force=true` 跳过） |
+| POST | `/api/v2/bangumi/:id/refresh` | 强制重新抓取并覆盖 Bangumi 的标题、类型、封面与详情缓存 |
 | GET | `/api/v2/imdb/search?q=Interstellar&page=1&use_api=false` | 在线搜索 IMDb，支持免 API / OMDb API |
 | GET | `/api/v2/imdb/:id?force=true&use_api=false` | 按 IMDb `tt...` ID 获取详情（24h 本地缓存） |
 | GET | `/api/v2/search/local?q=...&page=1&page_size=20` | 搜索本地缓存 |

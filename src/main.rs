@@ -265,6 +265,10 @@ async fn main() {
         .route("/search/local", get(api::v2::search::search_local))
         .route("/bangumi/:id", get(api::v2::search::get_bangumi))
         .route(
+            "/bangumi/:id/refresh",
+            post(api::v2::search::refresh_bangumi),
+        )
+        .route(
             "/bangumi/:id/episodes",
             get(api::v2::search::get_bangumi_episodes),
         )

@@ -60,7 +60,7 @@ pub async fn add_record(
                     recorder: inner.recorder,
                     date: inner.date.map(|d| d.and_hms_opt(0, 0, 0).unwrap()),
                 }),
-                -2 => not_found("Bangumi not found"),
+                -2 => not_found("Item not found"),
                 -3 => conflict("Record already exists"),
                 _ => bad_request("Invalid parameters"),
             }

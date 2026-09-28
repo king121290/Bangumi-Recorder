@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import { WifiOff } from "lucide-react";
 import { Toaster } from "sonner";
@@ -9,15 +8,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/lib/auth-context";
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false },
-          mutations: { retry: 0 },
-        },
-      }),
-  );
   return (
     <ThemeProvider
       attribute="class"
@@ -25,15 +15,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
       enableSystem
       disableTransitionOnChange
     >
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider delayDuration={280}>
-          <AuthProvider>
-            <OfflineBanner />
-            {children}
-            <Toaster richColors position="top-center" closeButton />
-          </AuthProvider>
-        </TooltipProvider>
-      </QueryClientProvider>
+      <TooltipProvider delayDuration={280}>
+        <AuthProvider>
+          <OfflineBanner />
+          {children}
+          <Toaster richColors position="top-center" closeButton />
+        </AuthProvider>
+      </TooltipProvider>
     </ThemeProvider>
   );
 }

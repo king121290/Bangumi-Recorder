@@ -51,6 +51,17 @@ pub struct UpdateEpisodeBody {
     pub duration_seconds: Option<i32>,
 }
 
+pub(super) fn episode_has_user_visible_change(
+    old_watched: bool,
+    old_progress_seconds: Option<i32>,
+    new_watched: bool,
+    new_progress_seconds: Option<i32>,
+) -> bool {
+    old_watched != new_watched
+        || old_progress_seconds.filter(|seconds| *seconds != 0)
+            != new_progress_seconds.filter(|seconds| *seconds != 0)
+}
+
 #[derive(Deserialize)]
 pub struct ForceEpisodesQuery {
     pub force: Option<bool>,
@@ -437,7 +448,16 @@ pub async fn update_episode(
         "duration_seconds": updated.duration_seconds,
         "completed_at": updated.completed_at,
     });
-    if old_episode_value.as_ref() != Some(&new_episode_value) {
+    if episode_has_user_visible_change(
+        old_episode
+            .as_ref()
+            .is_some_and(|episode| episode.watched != 0),
+        old_episode
+            .as_ref()
+            .and_then(|episode| episode.progress_seconds),
+        updated.watched,
+        updated.progress_seconds,
+    ) {
         write_recording_log(
             &pool,
             recording_id,

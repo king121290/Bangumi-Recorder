@@ -160,6 +160,10 @@ pub async fn get_detail_list(
         }
         Err(e) => {
             log::error!("External media detail list DB error: {:?}", e);
+            return Json(DetailListResponse {
+                status: -1,
+                data: None,
+            });
         }
     }
 
@@ -213,6 +217,10 @@ pub async fn get_detail_list(
         }
         Err(e) => {
             log::error!("DB error: {:?}", e);
+            return Json(DetailListResponse {
+                status: -1,
+                data: None,
+            });
         }
     }
 

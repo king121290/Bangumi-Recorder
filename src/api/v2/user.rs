@@ -61,6 +61,8 @@ pub async fn update_password(
     let inner = v1_resp.0;
     if inner.status == 0 {
         success_empty()
+    } else if matches!(inner.status, 3 | 5) {
+        internal_error(inner.message.as_deref().unwrap_or("Password update failed"))
     } else {
         bad_request(inner.message.as_deref().unwrap_or("Password update failed"))
     }
@@ -119,5 +121,48 @@ pub async fn regenerate_api_token(
             log::error!("Failed to regenerate token: {:?}", e);
             internal_error("Failed to regenerate token")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn database_failure_does_not_report_success() {
+        let pool = sqlx::mysql::MySqlPoolOptions::new()
+            .connect_lazy("mysql://test:test@localhost/unused")
+            .unwrap();
+        pool.close().await;
+
+        let (status, _) = update_info(
+            State(pool.clone()),
+            Extension(AuthUser { user_id: 1 }),
+            Json(UpdateUserInfo {
+                nickname: Some("test".into()),
+                avatar: None,
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+        let (status, _) = update_password(
+            State(pool.clone()),
+            Extension(AuthUser { user_id: 1 }),
+            Json(UpdatePasswordRequest {
+                old_password: Some("old".into()),
+                new_password: Some("new".into()),
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+        let response = crate::api::detail_list::get_detail_list(
+            State(pool),
+            Extension(AuthUser { user_id: 1 }),
+        )
+        .await;
+        assert_ne!(response.0.status, 0);
+        assert!(response.0.data.is_none());
     }
 }
