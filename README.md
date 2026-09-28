@@ -105,7 +105,7 @@ docker run --rm -p 8080:8080 --env-file .env \
 
 ### Docker 快速部署（Compose）
 
-这是推荐的自托管方式：Compose 会启动应用和 MySQL，并在**首次创建数据库卷时**按文件名顺序执行所有 `migrations/*.up.sql`。
+这是推荐的自托管方式：Compose 会启动应用和 MySQL，并由一次性 `migrate` 服务使用 SQLx 迁移记录表执行未应用的 `migrations/*.up.sql`。应用只会在迁移成功后启动，因此后续版本新增迁移时，重新构建并启动即可增量升级数据库。
 
 1. 安装 Docker Engine 和 Docker Compose plugin，并确认命令可用：
 
@@ -146,7 +146,7 @@ docker compose down
 # 更新镜像/代码后重新构建并启动
 docker compose up --build -d
 
-# 停止服务并删除数据库数据；下次启动将重新执行初始迁移
+# 停止服务并删除数据库数据；下次启动会从头执行全部迁移
 docker compose down -v
 ```
 

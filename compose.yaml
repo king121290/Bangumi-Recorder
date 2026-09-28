@@ -9,8 +9,6 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
     volumes:
       - mysql-data:/var/lib/mysql
-      - ./migrations:/docker-entrypoint-initdb.d/migrations:ro
-      - ./docker/mysql-init/00-migrations.sh:/docker-entrypoint-initdb.d/00-migrations.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 5s
@@ -18,14 +16,24 @@ services:
       retries: 20
       start_period: 20s
 
+  migrate:
+    image: bangumi-recorder:local
+    entrypoint: ["bangumi-recorder-migrate"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://${MYSQL_USER:-bangumi}:${MYSQL_PASSWORD}@db:3306/${MYSQL_DATABASE:-bangumi_recorder}
+
   app:
     build:
       context: .
     image: bangumi-recorder:local
     restart: unless-stopped
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       LISTEN: 0.0.0.0
       LISTEN_PORT: 8080
