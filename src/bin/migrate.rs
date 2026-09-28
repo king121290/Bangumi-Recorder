@@ -42,9 +42,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .fetch_one(&pool)
     .await?;
     if function_exists == 0 {
+        println!("Creating MySQL uuid_v7() compatibility function...");
         sqlx::raw_sql(UUID_V7_FUNCTION).execute(&pool).await?;
+    } else {
+        println!("MySQL uuid_v7() compatibility function already exists.");
     }
 
+    println!("Applying SQLx migrations...");
     sqlx::migrate!().run(&pool).await?;
+    println!("SQLx migrations completed successfully.");
     Ok(())
 }
