@@ -21,14 +21,14 @@
 |------|------|
 | 后端 | Rust (Edition 2024), Axum 0.7, Tokio, SQLx (MySQL) |
 | 前端 | React 19, Next.js 16 App Router, TypeScript, Tailwind CSS 4, shadcn/ui + Radix UI, Motion, TanStack Query |
-| 数据库 | MySQL |
+| 数据库 | MariaDB |
 | 数据来源 | 抓取 [bgm.tv](https://bgm.tv)、IMDb suggestion / OMDb API |
 
 ## 前置条件
 
 - [Rust](https://rustup.rs/) (Edition 2024)
 - [Node.js](https://nodejs.org/) >= 20.9
-- MySQL 数据库
+- MariaDB 数据库
 - [sqlx-cli](https://crates.io/crates/sqlx-cli)（用于数据库迁移）
 
 ## 快速开始
