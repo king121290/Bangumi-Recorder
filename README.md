@@ -90,6 +90,68 @@ cargo build --release
 
 服务启动后访问 `http://127.0.0.1:8080`。
 
+### Docker（初版）
+
+镜像在构建时编译前端静态文件并嵌入 Rust 二进制；运行镜像只包含该二进制及其 TLS 证书。
+
+```shell
+docker build -t bangumi-recorder:local .
+docker run --rm -p 8080:8080 --env-file .env \
+  -e LISTEN=0.0.0.0 \
+  bangumi-recorder:local
+```
+
+容器需能访问 `DATABASE_URL` 指向的 MySQL。请在首次启动前执行数据库迁移；Dockerfile 不会自动执行迁移。`JWT_SECRET` 等敏感变量只应在运行时传入，不应写入镜像。
+
+### Docker 快速部署（Compose）
+
+这是推荐的自托管方式：Compose 会启动应用和 MySQL，并在**首次创建数据库卷时**按文件名顺序执行所有 `migrations/*.up.sql`。
+
+1. 安装 Docker Engine 和 Docker Compose plugin，并确认命令可用：
+
+   ```shell
+   docker compose version
+   ```
+
+2. 创建部署配置：
+
+   ```shell
+   cp compose.env.example .env
+   openssl rand -hex 32
+   ```
+
+   编辑 `.env`，将 `MYSQL_PASSWORD`、`MYSQL_ROOT_PASSWORD` 和 `JWT_SECRET` 替换为随机值。`MYSQL_PASSWORD` 会用于构造数据库 URL，建议只使用字母、数字、`-` 与 `_`。
+
+3. 构建并在后台启动全部服务：
+
+   ```shell
+   docker compose up --build -d
+   ```
+
+4. 确认服务已就绪：
+
+   ```shell
+   docker compose ps
+   docker compose logs -f app
+   ```
+
+   当 `app` 显示为 healthy 后，访问 `http://127.0.0.1:8080`。如需修改对外端口，在 `.env` 中设置 `APP_PORT`，例如 `APP_PORT=18080`。
+
+常用维护命令：
+
+```shell
+# 停止服务，保留数据库数据
+docker compose down
+
+# 更新镜像/代码后重新构建并启动
+docker compose up --build -d
+
+# 停止服务并删除数据库数据；下次启动将重新执行初始迁移
+docker compose down -v
+```
+
+数据库保存在名为 `mysql-data` 的 Docker 卷。不要在已有生产数据的环境中执行 `docker compose down -v`。Compose 文件不包含代理或密钥；所有密钥都只保存在未纳入 Git 的 `.env` 中。
+
 ## API 接口
 
 ### 认证
