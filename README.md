@@ -90,7 +90,7 @@ cargo build --release
 
 服务启动后访问 `http://127.0.0.1:8080`。
 
-### Docker（初版）
+### Docker（手动运行）
 
 镜像在构建时编译前端静态文件并嵌入 Rust 二进制；运行镜像只包含该二进制及其 TLS 证书。
 
@@ -105,7 +105,7 @@ docker run --rm -p 8080:8080 --env-file .env \
 
 ### Docker 快速部署（Compose）
 
-这是推荐的自托管方式：Compose 会启动应用和 MySQL，并由一次性 `migrate` 服务使用 SQLx 迁移记录表执行未应用的 `migrations/*.up.sql`。应用只会在迁移成功后启动，因此后续版本新增迁移时，重新构建并启动即可增量升级数据库。
+这是推荐的自托管方式。Compose 会依次启动 MySQL、一次性 `migrate` 服务和应用；`migrate` 使用 SQLx 的 `_sqlx_migrations` 记录表执行尚未应用的 `migrations/*.up.sql`，应用仅会在迁移成功后启动。历史迁移不会重复执行，且 SQLx 会校验它们未被修改。
 
 1. 安装 Docker Engine 和 Docker Compose plugin，并确认命令可用：
 
@@ -128,14 +128,17 @@ docker run --rm -p 8080:8080 --env-file .env \
    docker compose up --build -d
    ```
 
+   首次启动时，`migrate` 会创建数据库表并正常退出；这是预期行为，不表示服务异常。
+
 4. 确认服务已就绪：
 
    ```shell
    docker compose ps
+   docker compose logs migrate
    docker compose logs -f app
    ```
 
-   当 `app` 显示为 healthy 后，访问 `http://127.0.0.1:8080`。如需修改对外端口，在 `.env` 中设置 `APP_PORT`，例如 `APP_PORT=18080`。
+   `migrate` 应以状态码 `0` 退出，随后当 `app` 显示为 healthy 后，访问 `http://127.0.0.1:8080`。如需修改对外端口，在 `.env` 中设置 `APP_PORT`，例如 `APP_PORT=18080`。
 
 常用维护命令：
 
@@ -143,7 +146,7 @@ docker run --rm -p 8080:8080 --env-file .env \
 # 停止服务，保留数据库数据
 docker compose down
 
-# 更新镜像/代码后重新构建并启动
+# 更新镜像/代码后重新构建并启动；如有新迁移，migrate 会只执行新增项
 docker compose up --build -d
 
 # 停止服务并删除数据库数据；下次启动会从头执行全部迁移
@@ -151,6 +154,8 @@ docker compose down -v
 ```
 
 数据库保存在名为 `mysql-data` 的 Docker 卷。不要在已有生产数据的环境中执行 `docker compose down -v`。Compose 文件不包含代理或密钥；所有密钥都只保存在未纳入 Git 的 `.env` 中。
+
+> 从旧版 Docker Compose 部署切换到当前迁移服务时：如果旧数据库仅含测试数据，先执行 `docker compose down -v`，再按上述步骤启动。生产数据库需要先备份并建立 SQLx 迁移基线，不能直接清空数据卷。
 
 ## API 接口
 
