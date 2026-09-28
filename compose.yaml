@@ -2,6 +2,9 @@ services:
   db:
     image: mysql:8.4
     restart: unless-stopped
+    # Allow the application migration user to create the sync triggers while
+    # MySQL binary logging is enabled.
+    command: ["--log-bin-trust-function-creators=1"]
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-bangumi_recorder}
       MYSQL_USER: ${MYSQL_USER:-bangumi}

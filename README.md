@@ -105,7 +105,7 @@ docker run --rm -p 8080:8080 --env-file .env \
 
 ### Docker 快速部署（Compose）
 
-这是推荐的自托管方式。Compose 会依次启动 MySQL、一次性 `migrate` 服务和应用；`migrate` 使用 SQLx 的 `_sqlx_migrations` 记录表执行尚未应用的 `migrations/*.up.sql`，应用仅会在迁移成功后启动。历史迁移不会重复执行，且 SQLx 会校验它们未被修改。
+这是推荐的自托管方式。Compose 会依次启动 MySQL、一次性 `migrate` 服务和应用；`migrate` 使用 SQLx 的 `_sqlx_migrations` 记录表执行尚未应用的 `migrations/*.up.sql`，应用仅会在迁移成功后启动。历史迁移不会重复执行，且 SQLx 会校验它们未被修改。MySQL 已启用 `log_bin_trust_function_creators`，以允许迁移创建用于同步变更流的触发器。
 
 1. 安装 Docker Engine 和 Docker Compose plugin，并确认命令可用：
 
