@@ -33,7 +33,9 @@ COPY frontend/package.json frontend/package-lock.json ./frontend/
 RUN npm ci --include=dev --prefix frontend
 
 COPY . .
-RUN cargo build --release --locked --bins
+RUN cargo build --release --locked \
+    && cargo install sqlx-cli --version 0.8.6 --locked \
+        --no-default-features --features mysql
 
 FROM debian:bookworm-slim AS runtime
 
@@ -50,7 +52,6 @@ RUN sed -i "s|http://deb.debian.org|${APT_BOOTSTRAP_MIRROR}|g" /etc/apt/sources.
     && useradd --system --uid 10001 --create-home app
 
 COPY --from=builder --chown=app:app /app/target/release/Bangumi-Recorder /usr/local/bin/bangumi-recorder
-COPY --from=builder --chown=app:app /app/target/release/migrate /usr/local/bin/bangumi-recorder-migrate
 
 USER app
 ENV LISTEN=0.0.0.0 \
@@ -62,3 +63,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl --fail --silent http://127.0.0.1:8080/api/v2/version || exit 1
 
 ENTRYPOINT ["bangumi-recorder"]
+
+# Keep migration tooling out of the application image.  Compose builds this
+# target for the one-shot migration service, which runs SQLx's normal CLI.
+FROM runtime AS migrator
+
+COPY --from=builder --chown=app:app /usr/local/cargo/bin/sqlx /usr/local/bin/sqlx
+COPY --from=builder --chown=app:app /app/migrations /migrations
+
+ENTRYPOINT ["sqlx", "migrate", "run", "--source", "/migrations"]

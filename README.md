@@ -13,22 +13,22 @@
 - **记录日志** — 记录创建、删除、进度、状态、单集进度等操作，可用于审计和年度总结
 - **用户级自动清理** — 每个用户可独立开启软删除记录 30 天后自动物理删除；服务启动时执行一次，之后每天服务器本地时间 0 点执行
 - **v2 API** — 统一的 `{status, data, message}` 响应格式 + HTTP 状态码，RESTful 路径设计
-- **自托管** — 数据完全由自己掌控，MySQL 存储
+- **自托管** — 数据完全由自己掌控，MariaDB 存储
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
-| 后端 | Rust (Edition 2024), Axum 0.7, Tokio, SQLx (MySQL) |
+| 后端 | Rust (Edition 2024), Axum 0.7, Tokio, SQLx (MariaDB/MySQL 协议) |
 | 前端 | React 19, Next.js 16 App Router, TypeScript, Tailwind CSS 4, shadcn/ui + Radix UI, Motion, TanStack Query |
-| 数据库 | MariaDB |
+| 数据库 | MariaDB 11.7+ |
 | 数据来源 | 抓取 [bgm.tv](https://bgm.tv)、IMDb suggestion / OMDb API |
 
 ## 前置条件
 
 - [Rust](https://rustup.rs/) (Edition 2024)
 - [Node.js](https://nodejs.org/) >= 20.9
-- MariaDB 数据库
+- MariaDB 11.7+ 数据库（使用原生 `UUID_v7()`）
 - [sqlx-cli](https://crates.io/crates/sqlx-cli)（用于数据库迁移）
 
 ## 快速开始
@@ -101,11 +101,11 @@ docker run --rm -p 8080:8080 --env-file .env \
   bangumi-recorder:local
 ```
 
-容器需能访问 `DATABASE_URL` 指向的 MySQL。请在首次启动前执行数据库迁移；Dockerfile 不会自动执行迁移。`JWT_SECRET` 等敏感变量只应在运行时传入，不应写入镜像。
+容器需能访问 `DATABASE_URL` 指向的 MariaDB。请在首次启动前执行数据库迁移；Dockerfile 不会自动执行迁移。`JWT_SECRET` 等敏感变量只应在运行时传入，不应写入镜像。
 
 ### Docker 快速部署（Compose）
 
-这是推荐的自托管方式。Compose 会依次启动 MySQL、一次性 `migrate` 服务和应用；`migrate` 使用 SQLx 的 `_sqlx_migrations` 记录表执行尚未应用的 `migrations/*.up.sql`，应用仅会在迁移成功后启动。历史迁移不会重复执行，且 SQLx 会校验它们未被修改。MySQL 已启用 `log_bin_trust_function_creators`，以允许迁移创建用于同步变更流的触发器和兼容的 `uuid_v7()` 函数。
+这是推荐的自托管方式。Compose 会依次启动 MariaDB、一次性 `migrate` 服务和应用；`migrate` 使用 Dockerfile 中独立构建的 `sqlx-cli` 执行 `migrations/*.up.sql`，并通过 SQLx 的 `_sqlx_migrations` 记录表追踪版本。应用仅会在迁移成功后启动；历史迁移不会重复执行，且 SQLx 会校验它们未被修改。MariaDB 11.7+ 原生提供 `UUID_v7()`，不需要额外创建兼容函数。
 
 1. 安装 Docker Engine 和 Docker Compose plugin，并确认命令可用：
 
@@ -153,9 +153,9 @@ docker compose up --build -d
 docker compose down -v
 ```
 
-数据库保存在名为 `mysql-data` 的 Docker 卷。不要在已有生产数据的环境中执行 `docker compose down -v`。Compose 文件不包含代理或密钥；所有密钥都只保存在未纳入 Git 的 `.env` 中。
+数据库保存在名为 `mariadb-data` 的 Docker 卷。不要在已有生产数据的环境中执行 `docker compose down -v`。Compose 文件不包含代理或密钥；所有密钥都只保存在未纳入 Git 的 `.env` 中。
 
-> 从旧版 Docker Compose 部署切换到当前迁移服务时：如果旧数据库仅含测试数据，先执行 `docker compose down -v`，再按上述步骤启动。生产数据库需要先备份并建立 SQLx 迁移基线，不能直接清空数据卷。
+> 从此前的 MySQL Compose 部署切换到本配置时，不能复用原来的 `mysql-data` 卷。若其中只是测试数据，先执行 `docker compose down -v --remove-orphans`，再按上述步骤启动；生产数据则应先备份并制订 MySQL 到 MariaDB 的迁移方案，不能直接挂载或清空数据卷。
 
 ## API 接口
 

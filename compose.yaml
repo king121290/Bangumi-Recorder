@@ -1,27 +1,27 @@
 services:
   db:
-    image: mysql:8.4
+    # UUID_v7() is native to MariaDB 11.7 and newer.
+    image: mariadb:11.7
     restart: unless-stopped
-    # Allow the application migration user to create the sync triggers while
-    # MySQL binary logging is enabled.
-    command: ["--log-bin-trust-function-creators=1"]
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-bangumi_recorder}
       MYSQL_USER: ${MYSQL_USER:-bangumi}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
     volumes:
-      - mysql-data:/var/lib/mysql
+      - mariadb-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 5s
       timeout: 5s
       retries: 20
       start_period: 20s
 
   migrate:
-    image: bangumi-recorder:local
-    entrypoint: ["bangumi-recorder-migrate"]
+    build:
+      context: .
+      target: migrator
+    image: bangumi-recorder-migrate:local
     restart: "no"
     depends_on:
       db:
@@ -58,4 +58,4 @@ services:
       start_period: 15s
 
 volumes:
-  mysql-data:
+  mariadb-data:
