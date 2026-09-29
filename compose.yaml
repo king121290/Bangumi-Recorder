@@ -32,6 +32,7 @@ services:
   app:
     build:
       context: .
+      target: runtime
     image: bangumi-recorder:local
     restart: unless-stopped
     depends_on:

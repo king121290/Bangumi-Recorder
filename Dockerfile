@@ -37,7 +37,7 @@ RUN cargo build --release --locked \
     && cargo install sqlx-cli --version 0.8.6 --locked \
         --no-default-features --features mysql
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim AS app-base
 
 ARG APT_MIRROR=https://mirrors.ustc.edu.cn
 ARG APT_BOOTSTRAP_MIRROR=http://mirrors.ustc.edu.cn
@@ -66,9 +66,13 @@ ENTRYPOINT ["bangumi-recorder"]
 
 # Keep migration tooling out of the application image.  Compose builds this
 # target for the one-shot migration service, which runs SQLx's normal CLI.
-FROM runtime AS migrator
+FROM app-base AS migrator
 
 COPY --from=builder --chown=app:app /usr/local/cargo/bin/sqlx /usr/local/bin/sqlx
 COPY --from=builder --chown=app:app /app/migrations /migrations
 
 ENTRYPOINT ["sqlx", "migrate", "run", "--source", "/migrations"]
+
+# The last stage is the default for builds without --target. Inherit the
+# application entrypoint and filesystem without the migrator's additions.
+FROM app-base AS runtime
