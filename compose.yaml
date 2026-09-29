@@ -2,6 +2,8 @@ services:
   db:
     # UUID_v7() is native to MariaDB 11.7 and newer.
     image: mariadb:11.7
+    network_mode: host
+    command: ["--bind-address=127.0.0.1", "--port=${MYSQL_PORT:-3306}"]
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-bangumi_recorder}
@@ -11,7 +13,7 @@ services:
     volumes:
       - mariadb-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      test: ["CMD-SHELL", "mariadb-admin ping --protocol=tcp -h 127.0.0.1 -P ${MYSQL_PORT:-3306} -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -22,37 +24,41 @@ services:
       context: .
       target: migrator
     image: bangumi-recorder-migrate:local
+    network_mode: host
     restart: "no"
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: mysql://${MYSQL_USER:-bangumi}:${MYSQL_PASSWORD}@db:3306/${MYSQL_DATABASE:-bangumi_recorder}
+      DATABASE_URL: mysql://${MYSQL_USER:-bangumi}:${MYSQL_PASSWORD}@127.0.0.1:${MYSQL_PORT:-3306}/${MYSQL_DATABASE:-bangumi_recorder}
 
   app:
     build:
       context: .
       target: runtime
     image: bangumi-recorder:local
+    network_mode: host
     restart: unless-stopped
     depends_on:
       migrate:
         condition: service_completed_successfully
     environment:
       LISTEN: 0.0.0.0
-      LISTEN_PORT: 8080
+      LISTEN_PORT: ${APP_PORT:-8080}
       RUST_LOG: ${RUST_LOG:-info}
-      DATABASE_URL: mysql://${MYSQL_USER:-bangumi}:${MYSQL_PASSWORD}@db:3306/${MYSQL_DATABASE:-bangumi_recorder}
+      DATABASE_URL: mysql://${MYSQL_USER:-bangumi}:${MYSQL_PASSWORD}@127.0.0.1:${MYSQL_PORT:-3306}/${MYSQL_DATABASE:-bangumi_recorder}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       ALLOW_REGISTER: ${ALLOW_REGISTER:-true}
       REGISTER_NEED_TOKEN: ${REGISTER_NEED_TOKEN:-false}
       REGISTER_TOKEN: ${REGISTER_TOKEN:-}
       OMDB_API_KEY: ${OMDB_API_KEY:-}
       IMDB_SEARCH_MODE: ${IMDB_SEARCH_MODE:-no_api}
-    ports:
-      - "${APP_PORT:-8080}:8080"
+      HTTP_PROXY: ${HTTP_PROXY:-${http_proxy:-}}
+      HTTPS_PROXY: ${HTTPS_PROXY:-${https_proxy:-}}
+      ALL_PROXY: ${ALL_PROXY:-${all_proxy:-}}
+      NO_PROXY: ${NO_PROXY:-${no_proxy:-localhost,127.0.0.1,::1}}
     healthcheck:
-      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8080/api/v2/version >/dev/null"]
+      test: ["CMD-SHELL", "curl --noproxy '*' --fail --silent http://127.0.0.1:$$LISTEN_PORT/api/v2/version >/dev/null"]
       interval: 30s
       timeout: 5s
       retries: 3

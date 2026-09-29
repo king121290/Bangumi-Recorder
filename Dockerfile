@@ -1,30 +1,32 @@
 # syntax=docker/dockerfile:1
 
+ARG RUST_VERSION=1.88.0
+FROM rust:${RUST_VERSION}-bookworm AS rust-toolchain
+
 # The frontend is exported at Rust build time by build.rs, so Node and Rust
 # intentionally live in the same builder stage.
 FROM node:20-bookworm AS builder
 
-ARG RUST_VERSION=1.88.0
-# Debian 12 container images use the DEB822 source file. This build-time
-# setting can be overridden with --build-arg APT_MIRROR=<mirror-origin>.
-ARG APT_MIRROR=https://mirrors.ustc.edu.cn
+# Keep Debian's default source; override with --build-arg APT_MIRROR=<mirror-origin>.
+# Debian 12 container images use the DEB822 source file.
+ARG APT_MIRROR=http://deb.debian.org
 ENV CARGO_HOME=/usr/local/cargo \
     RUSTUP_HOME=/usr/local/rustup \
     PATH=/usr/local/cargo/bin:$PATH
+
+# Both images use Debian Bookworm; reuse the preinstalled Rust toolchain.
+COPY --from=rust-toolchain /usr/local/cargo /usr/local/cargo
+COPY --from=rust-toolchain /usr/local/rustup /usr/local/rustup
 
 RUN sed -i "s|http://deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
-        curl \
         git \
         libssl-dev \
         pkg-config \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init \
-    && sh /tmp/rustup-init -y --profile minimal --default-toolchain "${RUST_VERSION}" \
-    && rm /tmp/rustup-init
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -39,8 +41,8 @@ RUN cargo build --release --locked \
 
 FROM debian:bookworm-slim AS app-base
 
-ARG APT_MIRROR=https://mirrors.ustc.edu.cn
-ARG APT_BOOTSTRAP_MIRROR=http://mirrors.ustc.edu.cn
+ARG APT_MIRROR=http://deb.debian.org
+ARG APT_BOOTSTRAP_MIRROR=http://deb.debian.org
 
 RUN sed -i "s|http://deb.debian.org|${APT_BOOTSTRAP_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
     && apt-get update \

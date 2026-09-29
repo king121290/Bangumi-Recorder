@@ -107,6 +107,10 @@ docker run --rm -p 8080:8080 --env-file .env \
 
 这是推荐的自托管方式。Compose 会依次启动 MariaDB、一次性 `migrate` 服务和应用；`migrate` 使用 Dockerfile 中独立构建的 `sqlx-cli` 执行 `migrations/*.up.sql`，并通过 SQLx 的 `_sqlx_migrations` 记录表追踪版本。应用仅会在迁移成功后启动；历史迁移不会重复执行，且 SQLx 会校验它们未被修改。MariaDB 11.7+ 原生提供 `UUID_v7()`，不需要额外创建兼容函数。
 
+所有服务使用宿主机网络，适用于 Linux Docker Engine；Docker Desktop 4.34+ 需先启用 host networking。应用直接监听宿主机的 `APP_PORT`（默认 `8080`），MariaDB 仅监听 `127.0.0.1:MYSQL_PORT`（默认 `3306`）。这两个端口需要可用；若宿主机已有数据库，请在 `.env` 中设置其他 `MYSQL_PORT`。
+
+如需通过宿主机代理访问 Bangumi，可在 `.env` 中设置 `HTTP_PROXY=http://127.0.0.1:10808` 和 `HTTPS_PROXY=http://127.0.0.1:10808`（按实际代理端口调整）。这些变量会传给运行中的应用，构建时的 `--build-arg` 不会替代此配置。使用 `pkexec` 时也建议写入 `.env`，因为终端环境变量可能不会保留。
+
 1. 安装 Docker Engine 和 Docker Compose plugin，并确认命令可用：
 
    ```shell
@@ -153,7 +157,7 @@ docker compose up --build -d
 docker compose down -v
 ```
 
-数据库保存在名为 `mariadb-data` 的 Docker 卷。不要在已有生产数据的环境中执行 `docker compose down -v`。Compose 文件不包含代理或密钥；所有密钥都只保存在未纳入 Git 的 `.env` 中。
+数据库保存在名为 `mariadb-data` 的 Docker 卷。不要在已有生产数据的环境中执行 `docker compose down -v`。代理地址和密钥通过环境变量或未纳入 Git 的 `.env` 配置，不应直接写入 Compose 文件。
 
 > 从此前的 MySQL Compose 部署切换到本配置时，不能复用原来的 `mysql-data` 卷。若其中只是测试数据，先执行 `docker compose down -v --remove-orphans`，再按上述步骤启动；生产数据则应先备份并制订 MySQL 到 MariaDB 的迁移方案，不能直接挂载或清空数据卷。
 
